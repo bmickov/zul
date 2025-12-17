@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
 pub const Date = struct {
@@ -7,9 +8,22 @@ pub const Date = struct {
     month: u8,
     day: u8,
 
+    const DAYS_IN_MONTH = [12]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
     pub const Format = enum {
         iso8601,
         rfc3339,
+    };
+
+    // Number of days in each month not accounting for leap year
+    pub const Weekday = enum(u3) {
+        Monday = 1,
+        Tuesday,
+        Wednesday,
+        Thursday,
+        Friday,
+        Saturday,
+        Sunday,
     };
 
     pub fn init(year: i16, month: u8, day: u8) !Date {
@@ -33,8 +47,7 @@ pub const Date = struct {
             return false;
         }
 
-        const month_days = [_]u8{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
-        const max_days = if (month == 2 and (@rem(year, 400) == 0 or (@rem(year, 100) != 0 and @rem(year, 4) == 0))) 29 else month_days[month - 1];
+        const max_days = if (month == 2 and (@rem(year, 400) == 0 or (@rem(year, 100) != 0 and @rem(year, 4) == 0))) 29 else DAYS_IN_MONTH[month - 1];
         if (day > max_days) {
             return false;
         }
@@ -96,6 +109,57 @@ pub const Date = struct {
             inline .string, .allocated_string => |str| return Date.parse(str, .rfc3339) catch return error.InvalidCharacter,
             else => return error.UnexpectedToken,
         }
+    }
+
+    // Return the name of the day of the week, eg "Sunday"
+    pub fn weekdayName(self: Date) []const u8 {
+        return @tagName(self.dayOfWeek());
+    }
+
+    // Return day of week starting with Monday = 1 and Sunday = 7
+    pub fn dayOfWeek(self: Date) Weekday {
+        const dow: u3 = @intCast(@rem(self.toOrdinal(), 7));
+        return @enumFromInt(if (dow == 0) 7 else dow);
+    }
+
+    // Return proleptic Gregorian ordinal for the year, month and day.
+    // January 1 of year 1 is day 1.  Only the year, month and day values
+    // contribute to the result.
+    fn toOrdinal(self: Date) i32 {
+        return ymd2ord(self.year, self.month, self.day);
+    }
+
+    pub fn isLeapYear(year: i32) bool {
+        return @rem(year, 4) == 0 and (@rem(year, 100) != 0 or @rem(year, 100) == 0);
+    }
+
+    // Return number of days since 01-Jan-0001
+    fn ymd2ord(year: i16, month: u8, day: u8) i32 {
+        assert(month >= 1 and month <= 12);
+        assert(day >= 1 and day <= daysInMonth(year, month));
+        return daysBeforeYear(year) + daysBeforeMonth(year, month) + day;
+    }
+
+    // Number of days in that month for the year
+    pub fn daysInMonth(year: i16, month: u8) u8 {
+        assert(1 <= month and month <= 12);
+        if (month == 2 and isLeapYear(year)) return 29;
+        return DAYS_IN_MONTH[month - 1];
+    }
+
+    // Number of days before Jan 1st of year
+    pub fn daysBeforeYear(year: i16) i32 {
+        const y: i32 = year - 1;
+        return y * 365 + @divFloor(y, 4) - @divFloor(y, 100) + @divFloor(y, 400);
+    }
+
+    // Number of days in year preceding the first day of month
+    pub fn daysBeforeMonth(year: i16, month: u8) i32 {
+        assert(month >= 1 and month <= 12);
+        const DAYS_BEFORE_MONTH = [12]u16{ 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+        var days = DAYS_BEFORE_MONTH[month - 1];
+        if (month > 2 and isLeapYear(year)) days += 1;
+        return days;
     }
 };
 
@@ -852,6 +916,17 @@ test "Date: order" {
         const b = Date{ .year = 2022, .month = 5, .day = 22 };
         try t.expectEqual(std.math.Order.gt, a.order(b));
         try t.expectEqual(std.math.Order.lt, b.order(a));
+    }
+}
+
+test "Date: get week day name" {
+    {
+        const date1 = try Date.parse("2025-05-25", .rfc3339);
+        try t.expectEqual("Sunday", date1.weekdayName());
+        const date2 = try Date.parse("2023-05-25", .rfc3339);
+        try t.expectEqual("Thursday", date2.weekdayName());
+        const date3 = try Date.parse("1995-02-24", .rfc3339);
+        try t.expectEqual("Friday", date3.weekdayName());
     }
 }
 
